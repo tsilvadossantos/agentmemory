@@ -468,8 +468,57 @@ class RepoUninstaller:
             "review and commit explicitly"
         )
 
+    def _unwire_claude_settings_local(self) -> None:
+        """Remove per-repo Claude hook entries from settings.local.json.
+
+        Mirrors what RepoInstaller wires. Matches by the scripts dir of the
+        agentmemory source checkout recorded in
+        ``shared_agent_assets_repo_path`` so we never remove hooks that point
+        at a different source checkout.
+        """
+        settings_path: Path = self.repo_root / ".claude" / "settings.local.json"
+        if not settings_path.exists():
+            return
+
+        settings = _load_json_safe(settings_path)
+        if not settings:
+            return
+
+        # Use the recorded source-checkout path to derive install_root. Fall
+        # back to a substring of "/scripts/shared-repo-memory/" which is
+        # uniquely the per-repo install signature.
+        source_repo_path = settings.get("shared_agent_assets_repo_path")
+        if isinstance(source_repo_path, str) and source_repo_path:
+            install_root_str = str(
+                Path(source_repo_path) / "scripts" / "shared-repo-memory"
+            )
+        else:
+            install_root_str = "/scripts/shared-repo-memory"
+
+        def save_json(path: Path, payload: dict) -> None:
+            if self.dry_run:
+                log(f"[DRY-RUN] would write {path}")
+                return
+            _save_json_pretty(path, payload)
+
+        ctx = InstallerContext(
+            install_root=Path(install_root_str),
+            home=Path.home(),
+            repo_root=self.repo_root,
+            dry_run=self.dry_run,
+            load_json=_load_json_safe,
+            save_json=save_json,
+            settings_path=settings_path,
+        )
+        ClaudeAdapter.unwire_hooks(ctx)
+        if self.dry_run:
+            log(f"[DRY-RUN] would unwire claude hooks in {settings_path}")
+        else:
+            log(f"unwired claude hooks in {settings_path}")
+
     def run(self) -> None:
         """Execute the full per-repo uninstall sequence."""
+        self._unwire_claude_settings_local()
         self._remove_canonical_git_hooks()
         self._unset_git_hooks_path()
         self._remove_hooks_dir_if_empty()

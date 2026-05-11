@@ -37,12 +37,22 @@ class InstallerContext:
     """Shared state passed to adapter.wire_hooks() during installation.
 
     Attributes:
-        install_root: Directory where scripts are installed (e.g., ~/.agent/shared-repo-memory/).
+        install_root: Directory where the helper scripts referenced by hooks
+            live. For a global install this is the canonical copy at
+            ~/.agent/shared-repo-memory/; for a per-repo install it is the
+            source checkout's scripts/shared-repo-memory/ directory.
         home: User home directory.
-        repo_root: Absolute path to the agentmemory repository root.
+        repo_root: Absolute path to the agentmemory source repository root.
         dry_run: When True, log actions without making changes.
         load_json: Callable to load a JSON file, returning {} on missing/corrupt.
         save_json: Callable to persist a dict as pretty-printed JSON.
+        settings_path: When set, the adapter writes hook config here instead of
+            its default user-level settings file. Used by per-repo install to
+            target <target-repo>/.claude/settings.local.json.
+        python_interpreter: When set, hook commands are prefixed with this
+            absolute interpreter path (e.g. /opt/homebrew/bin/python3.14) so the
+            hook is independent of PATH resolution in the child shell. When
+            None, the script path is invoked directly, relying on its shebang.
     """
 
     install_root: Path
@@ -51,6 +61,8 @@ class InstallerContext:
     dry_run: bool
     load_json: Any  # Callable[[Path], dict]
     save_json: Any  # Callable[[Path, dict], None]
+    settings_path: Path | None = None
+    python_interpreter: Path | None = None
 
 
 @runtime_checkable

@@ -416,15 +416,233 @@ class Installer:
         log(f"installed helper files under {self.install_root}")
 
 
+class RepoInstaller:
+    """Per-repo installer: Claude Code only, scripts referenced from the source checkout.
+
+    Unlike ``Installer`` (global), this writes hooks into the target repo's
+    ``.claude/settings.local.json`` and points them at the helper scripts in
+    the agentmemory source checkout via an absolute Python interpreter path.
+    Nothing is copied to ``~/.agent/``; nothing is wired for Codex or Gemini.
+
+    Also runs the bootstrap-repo logic against the target repo so the install
+    is one-shot: hooks plus the data directories (``.agents/memory/`` etc.)
+    that the running hooks expect.
+
+    Attributes:
+        source_repo_root: Absolute path to the agentmemory source checkout.
+        target_repo_root: Absolute path to the repository being wired.
+        dry_run: When True, log actions without making changes.
+        python_interpreter: Absolute interpreter path baked into hook commands.
+    """
+
+    def __init__(
+        self,
+        *,
+        source_repo_root: Path,
+        target_repo_root: Path,
+        dry_run: bool,
+        python_interpreter: Path,
+    ) -> None:
+        self.source_repo_root = source_repo_root
+        self.target_repo_root = target_repo_root
+        self.dry_run = dry_run
+        self.python_interpreter = python_interpreter
+        self.scripts_root = source_repo_root / "scripts" / "shared-repo-memory"
+        self.settings_path = (
+            target_repo_root / ".claude" / "settings.local.json"
+        )
+
+    def _validate(self) -> None:
+        """Hard-fail before any mutation if preconditions are not met.
+
+        Checks:
+          - The source checkout contains the helper scripts referenced by hooks.
+          - The Python interpreter exists and is 3.11+.
+        """
+        required_scripts = [
+            "session-start.py",
+            "post-turn-notify.py",
+            "prompt-guard.py",
+            "post-compact.py",
+            "bootstrap-repo.py",
+        ]
+        for name in required_scripts:
+            path = self.scripts_root / name
+            if not path.exists():
+                raise SystemExit(
+                    f"error: required script missing in source checkout: {path}\n"
+                    "Ensure the agentmemory-dave source checkout is intact "
+                    "before running per-repo install."
+                )
+
+        if not self.python_interpreter.exists():
+            raise SystemExit(
+                f"error: python interpreter not found: {self.python_interpreter}"
+            )
+        result = subprocess.run(
+            [
+                str(self.python_interpreter),
+                "-c",
+                "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)",
+            ],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise SystemExit(
+                f"error: {self.python_interpreter} is not Python 3.11+; "
+                "install a newer Python (e.g. `brew install python@3.14`)."
+            )
+
+    def _save_json(self, path: Path, data: dict) -> None:
+        """Pretty-print JSON to ``path`` (honors dry-run)."""
+        if self.dry_run:
+            log(f"[DRY-RUN] would write {path}")
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    def _load_json(self, path: Path) -> dict:
+        """Load a JSON file as a dict (returns {} on any error)."""
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _wire_claude(self) -> None:
+        """Write Claude hooks into the target repo's settings.local.json."""
+        ctx = InstallerContext(
+            install_root=self.scripts_root,
+            home=Path.home(),
+            repo_root=self.source_repo_root,
+            dry_run=self.dry_run,
+            load_json=self._load_json,
+            save_json=self._save_json,
+            settings_path=self.settings_path,
+            python_interpreter=self.python_interpreter,
+        )
+        ClaudeAdapter.wire_hooks(ctx)
+        if not self.dry_run:
+            log(f"wired claude hooks in {self.settings_path}")
+
+    def _bootstrap_data(self) -> None:
+        """Run bootstrap-repo.py against the target repo to create data dirs.
+
+        Delegates to the existing script via subprocess so the canonical
+        bootstrap logic (gitignore block, .githooks/, .codex/memory symlink,
+        ADR index) stays in one place.
+        """
+        cmd = [
+            str(self.python_interpreter),
+            str(self.scripts_root / "bootstrap-repo.py"),
+            "--repo-root",
+            str(self.target_repo_root),
+        ]
+        if self.dry_run:
+            cmd.append("--dry-run")
+        if self.dry_run:
+            log(f"[DRY-RUN] would run: {' '.join(cmd)}")
+        log(f"bootstrapping data artifacts in {self.target_repo_root}")
+        subprocess.run(cmd, check=True)
+
+    def run(self) -> None:
+        """Execute the per-repo install sequence."""
+        self._validate()
+        self._wire_claude()
+        self._bootstrap_data()
+        log(
+            f"per-repo install complete: hooks at {self.settings_path}, "
+            f"data dirs under {self.target_repo_root}/.agents/memory/"
+        )
+
+
+def _resolve_source_repo_root(str_override: str | None) -> Path:
+    """Resolve the agentmemory source repository root.
+
+    Tries explicit override, then the git toplevel of the directory containing
+    this script (works whether invoked from the checkout or via an absolute
+    path to ``install.py``), then exits with an error.
+    """
+    if str_override:
+        return Path(str_override).resolve()
+    script_dir = Path(__file__).resolve().parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=str(script_dir),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "error: cannot locate the agentmemory source checkout; pass "
+            "--repo-root explicitly."
+        )
+    return Path(result.stdout.strip()).resolve()
+
+
+def _resolve_target_repo_root(str_override: str | None) -> Path:
+    """Resolve the target repository root for a per-repo install.
+
+    Uses ``str_override`` when provided; otherwise falls back to the current
+    working directory's git toplevel; finally errors out.
+    """
+    if str_override:
+        return Path(str_override).expanduser().resolve()
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            "error: --repo-local-path not given and current directory is not "
+            "inside a git repository. Pass --repo-local-path <path> or cd into "
+            "the target repo."
+        )
+    return Path(result.stdout.strip()).resolve()
+
+
 def main() -> int:
-    """Entry point: parse arguments, resolve the repo root, and run the installer.
+    """Entry point: parse arguments, resolve roots, and run the installer.
+
+    Default mode is per-repo (Claude only, scripts referenced from the source
+    checkout, data dirs bootstrapped). ``--global`` opts into the legacy
+    user-level install that wires Claude/Codex/Gemini and copies helper
+    scripts into ``~/.agent/``.
 
     Returns:
-        int: 0 on success; 1 if the repo root cannot be determined.
+        int: 0 on success; non-zero on configuration errors.
     """
     set_runtime_log_context("installer", "n/a")
     parser = argparse.ArgumentParser(
-        description="Install agentmemory user assets and wire agent hooks."
+        description=(
+            "Install agentmemory. Default scope is per-repo (Claude only); "
+            "pass --global for the legacy user-level install."
+        )
+    )
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument(
+        "--repo-local-path",
+        help=(
+            "Target repo for a per-repo install. Defaults to the current git "
+            "toplevel. Cannot be combined with --global."
+        ),
+    )
+    scope.add_argument(
+        "--global",
+        dest="global_install",
+        action="store_true",
+        help=(
+            "Legacy user-level install: wires Claude/Codex/Gemini hooks at "
+            "~/.claude, ~/.codex, ~/.gemini and copies helper scripts into "
+            "~/.agent/shared-repo-memory/."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -434,37 +652,37 @@ def main() -> int:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Replace existing installed skill copies rather than skipping them.",
+        help="(--global only) Replace existing installed skill copies.",
     )
     parser.add_argument(
         "--repo-root",
-        help="Override the agentmemory repo root (defaults to git toplevel).",
+        help=(
+            "Override the agentmemory source checkout location (defaults to "
+            "the git toplevel of this script's directory)."
+        ),
     )
     args = parser.parse_args()
 
-    if args.repo_root:
-        root = Path(args.repo_root).resolve()
-    else:
-        # Default to the git repo containing this script so the installer can be
-        # run from any subdirectory within the agentmemory checkout.
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(
-                "error: must be run from inside the agentmemory git repo",
-                file=sys.stderr,
-            )
-            return 1
-        root = Path(result.stdout.strip()).resolve()
-
-    version = read_version(root)
+    source_root = _resolve_source_repo_root(args.repo_root)
+    version = read_version(source_root)
     print_banner(version)
-    Installer(repo_root=root, dry_run=args.dry_run, force=args.force).run()
-    log(f"install complete — v{version}")
+
+    if args.global_install:
+        Installer(
+            repo_root=source_root, dry_run=args.dry_run, force=args.force
+        ).run()
+        log(f"global install complete — v{version}")
+        return 0
+
+    # Per-repo install (default).
+    target_root = _resolve_target_repo_root(args.repo_local_path)
+    RepoInstaller(
+        source_repo_root=source_root,
+        target_repo_root=target_root,
+        dry_run=args.dry_run,
+        python_interpreter=Path(sys.executable).resolve(),
+    ).run()
+    log(f"per-repo install complete — v{version}")
     return 0
 
 

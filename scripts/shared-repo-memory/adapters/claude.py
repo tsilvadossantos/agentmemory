@@ -160,15 +160,35 @@ class ClaudeAdapter:
         )
 
     @staticmethod
+    def _build_command(ctx: InstallerContext, script_name: str) -> str:  # noqa: F821
+        """Build the hook command string for ``script_name``.
+
+        When ``ctx.python_interpreter`` is set, the command becomes
+        ``<python> <script_path>`` so it does not depend on PATH resolution in
+        the hook child shell. When unset, the script path is invoked directly
+        and relies on its shebang. The script path is always
+        ``ctx.install_root / script_name``.
+        """
+        script_path = ctx.install_root / script_name
+        if ctx.python_interpreter is not None:
+            return f"{ctx.python_interpreter} {script_path}"
+        return str(script_path)
+
+    @staticmethod
     def wire_hooks(ctx: InstallerContext) -> None:  # noqa: F821
-        """Wire Claude Code hooks by updating ~/.claude/settings.json."""
+        """Wire Claude Code hooks by updating a settings JSON file.
 
-        session_start_cmd = str(ctx.install_root / "session-start.py")
-        post_turn_cmd = str(ctx.install_root / "post-turn-notify.py")
-        prompt_guard_cmd = str(ctx.install_root / "prompt-guard.py")
-        post_compact_cmd = str(ctx.install_root / "post-compact.py")
+        Writes to ``ctx.settings_path`` when set (per-repo install targets
+        ``<repo>/.claude/settings.local.json``); otherwise falls back to the
+        user-level ``~/.claude/settings.json`` (global install).
+        """
 
-        settings_path = ctx.home / ".claude" / "settings.json"
+        session_start_cmd = ClaudeAdapter._build_command(ctx, "session-start.py")
+        post_turn_cmd = ClaudeAdapter._build_command(ctx, "post-turn-notify.py")
+        prompt_guard_cmd = ClaudeAdapter._build_command(ctx, "prompt-guard.py")
+        post_compact_cmd = ClaudeAdapter._build_command(ctx, "post-compact.py")
+
+        settings_path = ctx.settings_path or (ctx.home / ".claude" / "settings.json")
         settings = ctx.load_json(settings_path)
         settings["shared_repo_memory_configured"] = True
         settings["shared_agent_assets_repo_path"] = str(ctx.repo_root)
@@ -199,15 +219,17 @@ class ClaudeAdapter:
 
     @staticmethod
     def unwire_hooks(ctx: InstallerContext) -> None:  # noqa: F821
-        """Remove this adapter's entries from ``~/.claude/settings.json``.
+        """Remove this adapter's entries from the targeted settings file.
 
-        Removes only hook entries whose ``command`` path starts with
-        ``ctx.install_root``, and clears the two settings keys the installer
-        set. User-added hooks for other tools are preserved. The settings file
-        itself is left in place (it may hold unrelated Claude Code settings).
-        Idempotent: safe to run on a clean system or repeatedly.
+        Removes only hook entries whose ``command`` contains ``ctx.install_root``
+        (covers both the legacy bare-script form and the python-prefixed form),
+        and clears the two settings keys the installer set. User-added hooks for
+        other tools are preserved. The settings file itself is left in place (it
+        may hold unrelated Claude Code settings). Idempotent: safe to run on a
+        clean system or repeatedly. Targets ``ctx.settings_path`` when set,
+        otherwise the user-level ``~/.claude/settings.json``.
         """
-        settings_path = ctx.home / ".claude" / "settings.json"
+        settings_path = ctx.settings_path or (ctx.home / ".claude" / "settings.json")
         if not settings_path.exists():
             return
 
@@ -246,7 +268,7 @@ class ClaudeAdapter:
                         if not (
                             isinstance(h, dict)
                             and isinstance(h.get("command"), str)
-                            and h["command"].startswith(install_root_str)
+                            and install_root_str in h["command"]
                         )
                     ]
                     if len(kept_inner) == len(inner_hooks):
