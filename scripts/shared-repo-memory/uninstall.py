@@ -418,27 +418,40 @@ class RepoUninstaller:
         except OSError:
             return
 
-        # Build a regex that matches all canonical entries as a contiguous
-        # block, each on its own line, in order, with optional surrounding
-        # blank lines. We compile the entries from REQUIRED_GITIGNORE_ENTRIES
-        # so this stays in sync with the installer.
-        list_str_entries: list[str] = list(REQUIRED_GITIGNORE_ENTRIES)
-        str_block_pattern: str = r"\n?" + r"\n".join(
-            re.escape(entry) for entry in list_str_entries
-        ) + r"\n?"
-
-        if not re.search(str_block_pattern, str_text):
+        # Walk lines starting at the installer's header comment and remove
+        # every contiguous line that belongs to the canonical entry set. This
+        # tolerates subsets of REQUIRED_GITIGNORE_ENTRIES (e.g. a per-repo
+        # Claude-only install writes the block without ``.codex/local/``) while
+        # never touching user-added lines.
+        canonical: set[str] = set(REQUIRED_GITIGNORE_ENTRIES)
+        list_str_lines: list[str] = str_text.splitlines()
+        header_line: str = REQUIRED_GITIGNORE_ENTRIES[0]
+        try:
+            int_start: int = list_str_lines.index(header_line)
+        except ValueError:
             return
+        int_end: int = int_start
+        while int_end < len(list_str_lines) and list_str_lines[int_end] in canonical:
+            int_end += 1
 
         if self.dry_run:
             log(f"[DRY-RUN] would strip installer block from {gitignore_path}")
             return
 
-        str_stripped: str = re.sub(str_block_pattern, "\n", str_text, count=1)
-        # Collapse runs of blank lines the removal may have left behind.
+        # Also swallow a single blank line directly above the block, if any,
+        # so the removal does not leave a stray gap.
+        int_removal_start: int = int_start
+        if int_start > 0 and list_str_lines[int_start - 1] == "":
+            int_removal_start = int_start - 1
+
+        list_str_kept: list[str] = (
+            list_str_lines[:int_removal_start] + list_str_lines[int_end:]
+        )
+        str_stripped: str = "\n".join(list_str_kept)
         str_stripped = re.sub(r"\n{3,}", "\n\n", str_stripped)
-        # Trim leading/trailing blank lines.
-        str_stripped = str_stripped.strip("\n") + "\n" if str_stripped.strip() else ""
+        str_stripped = str_stripped.rstrip("\n")
+        if str_stripped:
+            str_stripped += "\n"
         gitignore_path.write_text(str_stripped, encoding="utf-8")
         log(f"stripped installer .gitignore block from {gitignore_path}")
 
