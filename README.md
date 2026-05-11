@@ -85,7 +85,7 @@ Shared memory is not collaborative until explicitly committed and pushed. The sy
 
 ## Prerequisites
 
-- Python 3.13+
+- Python 3.14+
 - Git
 - One or more supported agents: **Claude Code** (primary), **Gemini CLI**, or Codex CLI
 

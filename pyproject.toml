@@ -5,7 +5,7 @@ description = "Collaborative shared repo memory for fast-moving software work â€
 package-mode = false
 
 [tool.poetry.dependencies]
-python = ">=3.13,<3.14"
+python = ">=3.14,<4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.2"
@@ -14,10 +14,10 @@ ruff = "^0.11"
 
 [tool.black]
 line-length = 88
-target-version = ["py313"]
+target-version = ["py314"]
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 88
 
 [tool.ruff.lint]

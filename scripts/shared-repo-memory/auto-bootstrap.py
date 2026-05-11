@@ -28,7 +28,7 @@ for longer than LOCK_TTL_SECONDS.
 Requirements
 ------------
 - ANTHROPIC_API_KEY environment variable must be set.
-- Python 3.13+ (stdlib only -- no anthropic SDK needed).
+- Python 3.14+ (stdlib only -- no anthropic SDK needed).
 - The repo must already be wired (bootstrap-repo.py has run).
 
 Usage (called by session-start.py, not directly by the user)

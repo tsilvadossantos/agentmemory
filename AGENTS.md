@@ -1,6 +1,6 @@
 # Language & runtime
 
-- Python >= **3.13**
+- Python >= **3.14**
 
 - US English everywhere (identifiers, comments, errors, logs).
 
