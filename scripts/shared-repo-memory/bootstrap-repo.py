@@ -73,11 +73,27 @@ _GIT_HOOK_NAMES: tuple[str, ...] = (
 )
 
 
+_ALL_AGENTS: tuple[str, ...] = ("claude", "codex", "gemini")
+
+
+def _parse_agents(value: str) -> set[str]:
+    """Parse a comma-separated agents list, validating each entry."""
+    agents = {a.strip() for a in value.split(",") if a.strip()}
+    unknown = agents - set(_ALL_AGENTS)
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"unknown agents: {','.join(sorted(unknown))}. "
+            f"Valid: {','.join(_ALL_AGENTS)}"
+        )
+    return agents
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments.
 
     Returns:
-        argparse.Namespace: Parsed arguments with optional repo_root and dry_run.
+        argparse.Namespace: Parsed arguments with optional repo_root, dry_run,
+        and agents (scope of agent-specific scaffolding to create).
     """
     parser = argparse.ArgumentParser(
         description="Bootstrap repo-local shared-memory wiring."
@@ -90,6 +106,16 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Print each action without modifying any files.",
+    )
+    parser.add_argument(
+        "--agents",
+        type=_parse_agents,
+        default=set(_ALL_AGENTS),
+        help=(
+            "Comma-separated agents whose scaffolding should be created. "
+            "Default: all three (claude,codex,gemini) for backwards-compatible "
+            "global behavior. A per-repo Claude install passes --agents claude."
+        ),
     )
     return parser.parse_args()
 
@@ -171,14 +197,40 @@ def set_git_hooks_path(repo_root: Path, hooks_dir: str, *, dry_run: bool) -> Non
         )
 
 
-def ensure_gitignore(repo_root: Path, *, dry_run: bool) -> None:
+def _gitignore_entries_for(agents: set[str]) -> tuple[str, ...]:
+    """Filter REQUIRED_GITIGNORE_ENTRIES to the entries relevant for ``agents``.
+
+    Entries that live under an agent-specific top-level directory (``.codex/``,
+    ``.gemini/``, ``.claude/``) are dropped when that agent is not in scope.
+    Comment headers and agent-agnostic entries (``.githooks/``,
+    ``.agents/memory/...``) are always kept so a per-repo Claude install still
+    documents and ignores the data-bootstrap paths.
+    """
+    filtered: list[str] = []
+    for entry in REQUIRED_GITIGNORE_ENTRIES:
+        if entry.startswith(".codex/") and "codex" not in agents:
+            continue
+        if entry.startswith(".gemini/") and "gemini" not in agents:
+            continue
+        if entry.startswith(".claude/") and "claude" not in agents:
+            continue
+        filtered.append(entry)
+    return tuple(filtered)
+
+
+def ensure_gitignore(
+    repo_root: Path, agents: set[str], *, dry_run: bool
+) -> None:
     """Append missing agent-local ignore entries to the repo's .gitignore.
 
-    Reads the existing .gitignore (if any), checks which required entries are
-    missing, and appends only the missing ones.  Creates the file if absent.
+    Reads the existing .gitignore (if any), checks which entries (filtered to
+    the agents in scope) are missing, and appends only the missing ones.
+    Creates the file if absent.
 
     Args:
         repo_root: Absolute path to the repository root.
+        agents: Agents whose scaffolding is being bootstrapped. Used to filter
+            out gitignore entries for other agents.
         dry_run: When True, log the action without modifying the filesystem.
     """
     gitignore_path = repo_root / ".gitignore"
@@ -187,7 +239,7 @@ def ensure_gitignore(repo_root: Path, *, dry_run: bool) -> None:
         str_existing_text = gitignore_path.read_text(encoding="utf-8")
 
     list_str_missing_entries: list[str] = missing_gitignore_entries(
-        repo_root, REQUIRED_GITIGNORE_ENTRIES
+        repo_root, _gitignore_entries_for(agents)
     )
     if not list_str_missing_entries:
         return
@@ -300,28 +352,36 @@ def main() -> int:
         warn("bootstrap-repo.py: current directory is not inside a git repository")
         return 1
 
-    # Create all required directories.
-    for rel_path in (
+    agents: set[str] = args.agents
+
+    # Agent-agnostic directories always created.
+    list_str_rel_paths: list[str] = [
         ".agents/memory/adr",
         ".agents/memory/daily",
         ".agents/memory/pending",
         ".agents/memory/state",
-        ".codex/local",
-        ".claude/local",
         GITHOOKS_RELATIVE_DIR,
-    ):
+    ]
+    # Agent-specific scratch dirs added only when the agent is in scope.
+    if "claude" in agents:
+        list_str_rel_paths.append(".claude/local")
+    if "codex" in agents:
+        list_str_rel_paths.append(".codex/local")
+
+    for rel_path in list_str_rel_paths:
         target = repo_root / rel_path
         if not target.exists():
             log(f"creating directory {rel_path}", dry_run=dry_run)
             if not dry_run:
                 ensure_dir(target)
 
-    # Create or repair the .codex/memory -> ../.agents/memory symlink.
-    ensure_symlink(
-        repo_root / ".codex" / "memory",
-        EXPECTED_MEMORY_TARGET,
-        dry_run=dry_run,
-    )
+    # The .codex/memory access-path symlink exists only when Codex is in scope.
+    if "codex" in agents:
+        ensure_symlink(
+            repo_root / ".codex" / "memory",
+            EXPECTED_MEMORY_TARGET,
+            dry_run=dry_run,
+        )
 
     # Write the initial ADR index only when the file does not already exist.
     index_path = repo_root / ".agents" / "memory" / "adr" / "INDEX.md"
@@ -331,7 +391,7 @@ def main() -> int:
             write_text(index_path, _INDEX_INITIAL)
 
     # Ensure .gitignore covers local-only paths that should never be committed.
-    ensure_gitignore(repo_root, dry_run=dry_run)
+    ensure_gitignore(repo_root, agents, dry_run=dry_run)
 
     # Install the repo-local shared-memory hooks, including the commit guard.
     ensure_git_hooks(repo_root, dry_run=dry_run)

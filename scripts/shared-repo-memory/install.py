@@ -541,6 +541,8 @@ class RepoInstaller:
             str(self.scripts_root / "bootstrap-repo.py"),
             "--repo-root",
             str(self.target_repo_root),
+            "--agents",
+            "claude",
         ]
         if self.dry_run:
             cmd.append("--dry-run")
