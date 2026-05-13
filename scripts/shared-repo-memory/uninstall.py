@@ -48,7 +48,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter, InstallerContext
+from adapters import (
+    ClaudeAdapter,
+    CodexAdapter,
+    CursorAdapter,
+    GeminiAdapter,
+    InstallerContext,
+)
 from common import (
     GITHOOKS_RELATIVE_DIR,
     REQUIRED_GITIGNORE_ENTRIES,
@@ -58,12 +64,13 @@ from common import (
 
 # Adapter order for uninstallation. Each adapter removes only its own entries,
 # so the order is cosmetic (affects log output sequence).
-_ADAPTERS = [ClaudeAdapter, CodexAdapter, GeminiAdapter]
+_ADAPTERS = [ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter]
 
 # Per-agent directories where the installer placed skill symlinks.
 _AGENT_SKILL_DIRS: tuple[str, ...] = (
     ".claude/skills",
     ".codex/skills",
+    ".cursor/skills",
     ".gemini/skills",
 )
 
