@@ -31,7 +31,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-from adapters import ClaudeAdapter, CodexAdapter, GeminiAdapter, InstallerContext
+from adapters import (
+    ClaudeAdapter,
+    CodexAdapter,
+    CursorAdapter,
+    GeminiAdapter,
+    InstallerContext,
+)
 from agent_support import support_summary_lines
 from common import format_log_prefix, set_runtime_log_context
 
@@ -64,11 +70,12 @@ ADAPTER_FILES = [
     "adapters/__init__.py",
     "adapters/claude.py",
     "adapters/codex.py",
+    "adapters/cursor.py",
     "adapters/gemini.py",
 ]
 
 # Ordered list of adapter classes for installation wiring.
-_ADAPTERS = [ClaudeAdapter, CodexAdapter, GeminiAdapter]
+_ADAPTERS = [ClaudeAdapter, CodexAdapter, CursorAdapter, GeminiAdapter]
 
 
 def read_version(repo_root: Path) -> str:

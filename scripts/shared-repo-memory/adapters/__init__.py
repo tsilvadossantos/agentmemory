@@ -155,14 +155,22 @@ class AgentAdapter(Protocol):
 # when every stage (payload, process tree, env) fails to identify a runtime.
 from adapters.claude import ClaudeAdapter  # noqa: E402
 from adapters.codex import CodexAdapter  # noqa: E402
+from adapters.cursor import CursorAdapter  # noqa: E402
 from adapters.gemini import GeminiAdapter  # noqa: E402
 
-_ADAPTERS: list[type[AgentAdapter]] = [ClaudeAdapter, GeminiAdapter, CodexAdapter]
+_ADAPTERS: list[type[AgentAdapter]] = [
+    ClaudeAdapter,
+    GeminiAdapter,
+    CodexAdapter,
+    CursorAdapter,
+]
 
 # Binary names that identify an agent runtime process. Used by the
 # process-tree detection helper to resolve the active runtime even when the
 # runtime did not export its well-known env var to the hook subprocess.
-_RUNTIME_BINARIES: frozenset[str] = frozenset({"claude", "gemini", "codex"})
+# "agent" is the Cursor Agent CLI binary; the name is generic but the lookup
+# only runs inside hook subprocesses, so false-positive risk is low.
+_RUNTIME_BINARIES: frozenset[str] = frozenset({"claude", "gemini", "codex", "agent"})
 
 # Maximum ancestor depth walked when looking for a runtime binary. Bounded so a
 # pathological ancestry chain cannot hang SessionStart.
@@ -399,6 +407,7 @@ __all__ = [
     "ClaudeAdapter",
     "GeminiAdapter",
     "CodexAdapter",
+    "CursorAdapter",
     "UnknownAdapter",
     "detect_adapter",
     "detect_adapter_from_hook_event",
