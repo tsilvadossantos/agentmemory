@@ -2,7 +2,8 @@
 name = "agentmemory"
 version = "0.4.4"
 description = "Collaborative shared repo memory for fast-moving software work — helps people, agents, and teams stay aligned by capturing why decisions were made, what changed, and what comes next in plain Markdown in Git."
-package-mode = false
+package-mode = true
+packages = [{ include = "agentmemory", from = "src" }]
 
 [tool.poetry.dependencies]
 python = ">=3.13,<3.14"
@@ -25,3 +26,7 @@ select = ["E", "F", "I", "UP"]
 # E501 (line too long) is delegated to Black, which does not reformat docstrings.
 # Suppressing here avoids false positives on long docstring lines.
 ignore = ["E501"]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
