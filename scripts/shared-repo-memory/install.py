@@ -187,9 +187,21 @@ class Installer:
     def _ensure_dir(self, path: Path) -> None:
         """Create path and any missing parents, or log the would-be action in dry-run mode.
 
+        Removes broken symlinks at ``path`` before mkdir-ing. Without this,
+        ``Path.mkdir(exist_ok=True)`` raises ``FileExistsError`` when the path
+        is a symlink to a non-existent target (e.g., a stale link left by a
+        prior install pointing at a now-deleted clone).
+
         Args:
             path: Directory to create.
         """
+        if path.is_symlink() and not path.exists():
+            # Broken symlink (target doesn't resolve). Remove it so mkdir succeeds.
+            if self.dry_run:
+                log(f"[DRY-RUN] would remove broken symlink at {path}")
+            else:
+                log(f"removing broken symlink at {path}")
+                path.unlink()
         if self.dry_run:
             log(f"[DRY-RUN] would create {path}")
             return
